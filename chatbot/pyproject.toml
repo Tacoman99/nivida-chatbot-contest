@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "src"
+version = "0.1.0"
+description = ""
+authors = ["Tacoman99 <jorgepadres789@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+langchain-nvidia-ai-endpoints = "^0.2.2"
+langchain = "^0.2.16"
+langchain-community = "^0.2.16"
+langchain-core = "^0.2.38"
+streamlit = "^1.38.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

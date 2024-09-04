@@ -1,0 +1,91 @@
+from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
+from langchain.text_splitter import CharacterTextSplitter
+from langchain_community.document_loaders import DirectoryLoader
+from langchain_community.vectorstores import FAISS
+import pickle
+from langchain.output_parsers import StrOutputParser
+from langchain.prompts import ChatPromptTemplate
+import os
+import streamlit as st
+
+
+class LLMVectorDB:
+    def __init__(
+        self,
+        llm_model: str,
+        embedding_model: str,
+        docs_dir: str,
+    ) -> None:
+        self.llm_model = llm_model
+        self.embedding_model = embedding_model
+        self.docs_dir = docs_dir
+        self.llm = ChatNVIDIA(model=llm_model)
+        self.document_embedder = NVIDIAEmbeddings(model=embedding_model, model_type="passage")
+
+    def create_or_load_vectorstore(self, use_existing_vector_store: str = "Yes", vector_store_path: str = "vectorstore.pkl"):
+        vector_store_exists = os.path.exists(vector_store_path)
+
+        if use_existing_vector_store == "Yes" and vector_store_exists:
+            with open(vector_store_path, "rb") as f:
+                vectorstore = pickle.load(f)
+            st.sidebar.success("Existing vector store loaded successfully.")
+        else:
+            raw_documents = DirectoryLoader(self.docs_dir).load()
+            if raw_documents:
+                with st.sidebar:
+                    with st.spinner("Splitting documents into chunks..."):
+                        text_splitter = CharacterTextSplitter(chunk_size=512, chunk_overlap=200)
+                        documents = text_splitter.split_documents(raw_documents)
+
+                    with st.spinner("Adding document chunks to vector database..."):
+                        vectorstore = FAISS.from_documents(documents, self.document_embedder)
+
+                    with st.spinner("Saving vector store"):
+                        with open(vector_store_path, "wb") as f:
+                            pickle.dump(vectorstore, f)
+                    st.success("Vector store created and saved.")
+            else:
+                st.sidebar.warning("No documents available to process!", icon="⚠️")
+                return None  # Explicitly return None if no documents
+
+        return vectorstore
+
+    def chat_with_ai(self, vectorstore, use_existing_vector_store: str = "No"):
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        prompt_template = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful AI assistant. If provided with context, use it to inform your responses. If no context is available, use your general knowledge to provide a helpful response."),
+            ("human", "{input}")
+        ])
+
+        chain = prompt_template | self.llm | StrOutputParser()
+
+        user_input = st.chat_input("How can I help you today?")
+
+        if user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                full_response = ""
+
+                if vectorstore is not None and use_existing_vector_store == "Yes":
+                    retriever = vectorstore.as_retriever()
+                    docs = retriever.invoke(user_input)
+                    context = "\n\n".join([doc.page_content for doc in docs])
+                    augmented_user_input = f"Context: {context}\n\nQuestion: {user_input}\n"
+                else:
+                    augmented_user_input = f"Question: {user_input}\n"
+
+                for response in chain.stream({"input": augmented_user_input}):
+                    full_response += response
+                    message_placeholder.markdown(full_response + "▌")
+                message_placeholder.markdown(full_response)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
